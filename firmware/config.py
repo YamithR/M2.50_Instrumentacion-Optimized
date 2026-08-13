@@ -52,15 +52,15 @@ FRAME_MAGIC     = 0xAA    # header de frame device → host (14 bytes)
 CMD_MAGIC       = 0xBB    # header de comando host → device (3 bytes)
 CMD_VALVE_PULSE = 0x01    # cmd: pulso válvula manual
 CMD_SET_SENSORS = 0x02    # cmd: ControlLink — forzar sensores (bit3=on, bits0-2=S1/S2/S3)
+CMD_ENC_H       = 0x03    # cmd: ControlLink — delta encoder horizontal (int8 con signo)
+CMD_ENC_V       = 0x04    # cmd: ControlLink — delta encoder vertical (int8 con signo)
 HANDSHAKE       = b"\xAA\x55"   # handshake que envía el script por USB
 HANDSHAKE_ACK   = b"\x55\xAA"   # respuesta del ESP32-S3
 
 # ---------------------------------------------------------------------------
 # Fases de arranque (segundos desde inicio)
 # ---------------------------------------------------------------------------
-PHASE1_USB_S    = 10      # 0–10 s escucha USB UART
-PHASE2_BLE_S    = 40      # 10–40 s advertising BLE
-BLE_NAME        = "M2-DAQ"
+PHASE1_USB_S    = 10      # 0–10 s escucha USB UART; luego autónomo
 
 # ---------------------------------------------------------------------------
 # ESPNow — hacia ESP32-C3 (pantalla GC9A01)
@@ -74,8 +74,7 @@ ESPNOW_HZ       = 10      # frecuencia máxima de envío al C3
 LED_OFF         = (0, 0, 0)
 LED_VIOLET      = (40, 0, 60)     # inicializando
 LED_BLUE        = (0, 0, 80)      # USB (Fase 1)
-LED_YELLOW      = (60, 50, 0)     # BLE (Fase 2)
-LED_GREEN       = (0, 70, 0)      # autónomo (Fase 3)
+LED_GREEN       = (0, 70, 0)      # autónomo (Fase 2)
 LED_RED         = (90, 0, 0)      # flash disparo (S3)
 LED_ORANGE      = (80, 25, 0)     # flash recarga (S1)
 FLASH_FIRE_MS   = 100

@@ -9,14 +9,17 @@ Sistema de adquisición de datos (DAQ) optimizado para el sistema de arma M2.50,
 ```
 [ESP32-S3]  ──ESPNow──►  [ESP32-C3 + GC9A01 1.28"]
      │
-     ├── USB UART (binario empaquetado)
-     └── BLE UART
+     └── USB UART (binario empaquetado)
           │
      [Script Python / PySide6]
           ├── Dashboard tiempo real
           ├── Gráficas encoders / sensores / balas
-          └── Pestaña simulador intercambiable
+          ├── Ventana "Pantalla C3" (réplica del display en la app)
+          └── Pestaña simulador intercambiable + ControlLink
 ```
+
+> **Nota:** el soporte BLE se eliminó del firmware y de la app; el único
+> transporte host↔dispositivo es USB UART.
 
 ---
 
@@ -45,7 +48,7 @@ firmware/
 ├── config.py        # Única fuente de verdad (pines, timings, constantes)
 ├── main.py          # Orquestador secuencia de arranque + loop principal
 ├── sensors.py       # S1, S2, S3, ENC_H(A+B), ENC_V(A+B), Electroválvula
-├── transport.py     # Capa de transporte: USB UART / BLE / ninguno
+├── transport.py     # Capa de transporte: USB UART / ninguno
 ├── espnow_tx.py     # Transmisor ESPNow → ESP32-C3
 ├── hid_mouse.py     # USB HID mouse absoluto (encoders)
 ├── hid_kbd.py       # USB HID teclado (recarga → tecla r)
@@ -70,16 +73,8 @@ main.py:
   │                         HID sigue activo                  │
   │                         salta FASE 2                      │
   └───────────────────────────────────────────────────────────┘
-  ┌─ FASE 2: [10 – 40 s] ────────────────────────────────────┐
-  │  LED: 🟡 AMARILLO parpadeante (1 Hz)                     │
-  │  Activa BLE advertising ("M2-DAQ")                       │
-  │  Si conecta cliente BLE → LED: 🟡 AMARILLO fijo          │
-  │                            modo BLE binario activo        │
-  │                            HID sigue activo               │
-  └───────────────────────────────────────────────────────────┘
-  ┌─ FASE 3: [> 40 s sin conexión externa] ──────────────────┐
+  ┌─ FASE 2: [> 10 s sin conexión USB] ───────────────────────┐
   │  LED: 🟢 VERDE fijo                                      │
-  │  BLE apagado                                             │
   │  HID activo (encoders=mouse, S3=clic, S1=tecla r)        │
   │  ESPNow activo → ESP32-C3                                │
   │  Loop de sensores continuo, sin transmisión externa      │
@@ -99,9 +94,7 @@ main.py:
 | 🟣 Violeta fijo | Inicializando |
 | 🔵 Azul parpadeo | Esperando USB (Fase 1) |
 | 🔵 Azul fijo | Conectado por USB |
-| 🟡 Amarillo parpadeo | Advertising BLE (Fase 2) |
-| 🟡 Amarillo fijo | Conectado por BLE |
-| 🟢 Verde fijo | Operación autónoma HID (Fase 3) |
+| 🟢 Verde fijo | Operación autónoma HID (Fase 2) |
 | 🔴 Rojo flash | Disparo detectado (S3) |
 | 🟠 Naranja flash | Recarga detectada (S1) |
 
@@ -138,14 +131,24 @@ Total: 14 bytes por frame @ 50 Hz = 700 bytes/s
 
 ```
 Byte 0: 0xBB  (magic comando host→device)
-Byte 1: 0x01  (cmd: pulso válvula manual)
-Byte 2: uint8 duración en decenas de ms  (1=10ms, 5=50ms, 50=500ms)
+Byte 1: cmd
+        0x01  pulso válvula manual   → byte 2 = duración en decenas de ms
+        0x02  ControlLink sensores   → byte 2 = bit3=on, bit0=S1, bit1=S2, bit2=S3
+        0x03  ControlLink encoder H  → byte 2 = delta con signo (+128, int8)
+        0x04  ControlLink encoder V  → byte 2 = delta con signo (+128, int8)
 ```
+
+Un pulso manual (`0x01`) produce exactamente el mismo efecto que un disparo
+real: cuenta bala, clic HID, actualización de la electroválvula y aparece
+en la gráfica dentro del mismo ciclo. ControlLink (`0x02`-`0x04`) permite
+forzar sensores y encoders físicos desde la app para probar la respuesta
+real del hardware sin accionar el arma.
 
 ### A.6 ESPNow payload — ESP32-S3 → ESP32-C3
 
 ```python
-struct.pack(">HH", balas_max, balas_actuales)  # 4 bytes
+struct.pack(">HHB", balas_max, balas_actuales, flags)  # 5 bytes
+#   flags bit0 = recarga efectiva reciente (ventana de 1 s) → spinner
 ```
 
 ---
@@ -194,13 +197,25 @@ firmware_c3/
 **Lógica visual del borde circular:**
 
 - El borde se divide en arco completo (360°) = cargador lleno
-- A medida que bajan las balas, el arco se reduce desde **abajo hacia arriba** (fade-out vertical descendente)
-- Animación de disparo: flash de color + vibración del ícono bala en cada frame recibido con cambio
+- A medida que bajan las balas, el arco se reduce desde **arriba hacia abajo**
+  (el remanente queda anclado en la parte inferior del círculo)
 - Escala de colores del arco:
   - Verde (> 50% balas restantes)
   - Amarillo (20% – 50%)
   - Rojo (< 20%)
   - Rojo parpadeante (0 balas — cargador vacío)
+
+**Fila central — 3 cartuchos .50 estáticos:**
+
+- Se dibujan 3 cartuchos calibre .50 (culote, cuerpo, hombro, cuello, ojiva
+  de cobre), no texto/ícono genérico
+- Al disparar: el cartucho más próximo sale con salto + giro hacia afuera,
+  mientras el siguiente entra con fade-in en el mismo lugar
+- Al completarse una recarga (S1 sostenido ≥ 2.5 s continuos): la fila se
+  sustituye por **dos flechas circulares girando juntas en el mismo
+  sentido**, durante 1 s exactamente — antes de cumplirse los 2.5 s se
+  siguen viendo los cartuchos normalmente
+- Contador "actuales / máx" debajo del gráfico
 
 ---
 
@@ -216,17 +231,17 @@ daq_app/
     ├── window.py              # Ventana principal
     ├── connection/
     │   ├── usb_handler.py     # Detección y lectura UART (pyserial)
-    │   ├── ble_handler.py     # Conexión BLE (bleak, asyncio)
-    │   └── protocol.py        # Parser frames binarios de 14 bytes
+    │   └── protocol.py        # Parser de frames + builders de comandos
     ├── views/
     │   ├── dashboard.py       # Vista principal datos en vivo
     │   ├── charts_view.py     # Gráficas encoders H/V en tiempo real (pyqtgraph)
     │   ├── sensors_panel.py   # LEDs virtuales S1/S2/S3 + válvula
     │   ├── ammo_panel.py      # Contador balas visual + botón pulso válvula
-    │   └── sim_window.py      # Ventana flotante simulador
+    │   ├── c3_display.py      # Réplica del display GC9A01 dentro de la app
+    │   └── sim_window.py      # Ventana flotante simulador + ControlLink
     └── simulator/
         ├── sim_engine.py      # Máquina de estados real (S1/S2/S3 + encoders)
-        └── sim_controls.py    # Sliders y controles interactivos
+        └── sim_controls.py    # Sliders, toggles y checkbox ControlLink
 ```
 
 ### C.2 Dependencias Python
@@ -235,7 +250,7 @@ daq_app/
 PySide6          # GUI principal
 pyqtgraph        # Gráficas de alto rendimiento integradas en Qt
 pyserial         # Comunicación USB UART
-bleak            # BLE asyncio (cross-platform)
+pynput           # Emula clic/movimiento de mouse local sin hardware (ControlLink)
 ```
 
 ### C.3 Layout del Dashboard principal
@@ -261,10 +276,11 @@ bleak            # BLE asyncio (cross-platform)
 ```
 
 **Botón PULSO MANUAL (Electroválvula):**
-- Envía comando de control `0xBB 0x01 <duración>` al ESP32-S3 por USB o BLE
+- Envía comando de control `0xBB 0x01 <duración>` al ESP32-S3 por USB
 - Duración ajustable desde el script: 10 ms – 500 ms
 - Activa GPIO 12 (VALVE_OUT) durante la duración configurada y retorna al estado anterior
-- Útil para pruebas de actuación sin ciclo de disparo
+- Se comporta exactamente como un disparo real: cuenta bala, clic HID,
+  bloqueo si el cargador se agota y aparece en la gráfica en el mismo ciclo
 
 ### C.4 Ventana flotante — Simulador intercambiable
 
@@ -281,10 +297,21 @@ bleak            # BLE asyncio (cross-platform)
 │  Cadencia disparo: [██░░] 300 rpm      │
 │                                        │
 │  [▶ Simular ráfaga]  [⟳ Recargar]     │
+│                                        │
+│  ☐ ControlLink — forzar sensores      │
+│    físicos (S1/S2/S3 + encoders) USB  │
 └────────────────────────────────────────┘
 ```
 
-El modo **"Intercambiar con Real ⇄"** conecta los datos del simulador a las mismas vistas del dashboard, permitiendo validar la interfaz completa sin el microcontrolador físico conectado. El simulador replica la máquina de estados real del firmware (S1/S2/S3 + conteo de balas + encoders).
+El modo **"Intercambiar con Real ⇄"** conecta los datos del simulador a las mismas vistas del dashboard, permitiendo validar la interfaz completa sin el microcontrolador físico conectado. El simulador replica la máquina de estados real del firmware (S1/S2/S3 + conteo de balas + encoders), incluida la recarga por sostenimiento de S1 ≥ 2.5 s.
+
+**ControlLink:** con el checkbox activo y un ESP32-S3 conectado por USB, los
+toggles S1/S2/S3 y los sliders de encoder de esta ventana ya no solo mueven
+el simulador local: se envían al hardware real (comandos `0xBB 0x02`-`0x04`)
+y se combinan con OR sobre la lectura física de los sensores, permitiendo
+probar la respuesta física real (recarga, disparo, movimiento HID) desde la
+interfaz sin accionar el arma. Sin hardware conectado, ControlLink solo
+emula localmente el mouse (vía `pynput`) como vista previa.
 
 ### C.5 Flujo de conexión automática del script
 
@@ -295,10 +322,8 @@ Script inicia
     │       Si encuentra → envía handshake (0xAA 0x55)
     │       Si confirma  → modo USB activo → estado "🔵 USB"
     │
-    └─► Si no hay USB → escanea dispositivos BLE "M2-DAQ"
-            Si encuentra → conecta → modo BLE → estado "🟡 BLE"
-            Si no        → estado "🔴 Desconectado"
-                           → ofrece activar modo Simulador
+    └─► Si no hay USB → estado "🔴 Desconectado"
+                        → ofrece activar modo Simulador
 ```
 
 ---
@@ -308,11 +333,11 @@ Script inicia
 | Fase | Módulo | Entregable | Depende de |
 |---|---|---|---|
 | **1** | A — Firmware S3 | `config.py`, `sensors.py` (sin IMU), `hid_mouse.py`, `hid_kbd.py` | — |
-| **2** | A — Firmware S3 | `transport.py` (USB + BLE + handshake) + LED RGB en `main.py` | Fase 1 |
+| **2** | A — Firmware S3 | `transport.py` (USB + handshake) + LED RGB en `main.py` | Fase 1 |
 | **3** | A — Firmware S3 | `espnow_tx.py` + integración completa en `main.py` | Fase 1 |
 | **4** | B — Firmware C3 | `gc9a01.py` driver SPI desde cero | — |
 | **5** | B — Firmware C3 | `display.py` animación balística + `main.py` ESPNow RX | Fase 4 |
-| **6** | C — Script Python | `protocol.py` + `usb_handler.py` + `ble_handler.py` | Fase 2 |
+| **6** | C — Script Python | `protocol.py` + `usb_handler.py` | Fase 2 |
 | **7** | C — Script Python | Dashboard PySide6 + gráficas pyqtgraph + botón válvula | Fase 6 |
 | **8** | C — Script Python | Ventana flotante simulador intercambiable | Fase 7 |
 

@@ -7,7 +7,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from .connection.protocol import Frame, build_sensor_override, build_valve_pulse
+from .connection.protocol import (
+    Frame, build_encoder_delta, build_sensor_override, build_valve_pulse,
+)
 from .connection.usb_handler import UsbHandler, scan_ports
 from .simulator.sim_engine import SimEngine
 from .views.c3_display import C3DisplayWindow
@@ -147,24 +149,34 @@ class MainWindow(QMainWindow):
             self._usb.send_command(build_sensor_override(s1, s2, s3, enable))
 
     def _on_mouse_event(self, evt):
-        """ControlLink + movimiento de encoder: mueve el mouse del PC."""
+        """ControlLink + movimiento de encoder: si hay ESP32-S3 real
+        conectado, inyecta el delta en su contador físico (mismo camino de
+        código que un giro real → prueba la respuesta física real del
+        firmware). Si no hay hardware (solo simulador), mueve el mouse
+        local como vista previa."""
         if not self._link_was_on:
             return
-        try:
-            from pynput.mouse import Controller
-            m = Controller()
-            m.move(evt.dx, -evt.dy)
-        except ImportError:
-            pass
+        if self._connected and self._usb is not None:
+            if evt.dx:
+                self._usb.send_command(build_encoder_delta("h", evt.dx))
+            if evt.dy:
+                self._usb.send_command(build_encoder_delta("v", evt.dy))
+        else:
+            try:
+                from pynput.mouse import Controller
+                Controller().move(evt.dx, -evt.dy)
+            except ImportError:
+                pass
 
     def _on_fire_event(self):
-        """ControlLink + flanco S3: clic HID en el PC."""
-        if not self._link_was_on:
+        """ControlLink + flanco S3: si hay hardware real, el clic ya lo
+        genera el propio ESP32-S3 (HID nativo); en simulador puro, lo
+        emula localmente."""
+        if not self._link_was_on or self._connected:
             return
         try:
             from pynput.mouse import Controller, Button
-            m = Controller()
-            m.click(Button.left, 1)
+            Controller().click(Button.left, 1)
         except ImportError:
             pass
 

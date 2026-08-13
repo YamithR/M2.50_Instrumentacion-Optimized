@@ -20,6 +20,8 @@ FRAME_SIZE = 14
 CMD_MAGIC = 0xBB
 CMD_VALVE_PULSE = 0x01
 CMD_SET_SENSORS = 0x02
+CMD_ENC_H = 0x03
+CMD_ENC_V = 0x04
 HANDSHAKE = b"\xAA\x55"
 HANDSHAKE_ACK = b"\x55\xAA"
 
@@ -111,3 +113,11 @@ def build_sensor_override(s1: bool, s2: bool, s3: bool, enable: bool) -> bytes:
     arg = ((1 if s1 else 0) | (2 if s2 else 0) | (4 if s3 else 0)
            | (8 if enable else 0))
     return bytes([CMD_MAGIC, CMD_SET_SENSORS, arg])
+
+
+def build_encoder_delta(axis: str, delta: int) -> bytes:
+    """Comando 0xBB 0x03/0x04 <arg> — ControlLink: inyecta delta (-128..127)
+    al contador real del encoder H o V. arg = delta + 128 (sin signo)."""
+    cmd = CMD_ENC_H if axis == "h" else CMD_ENC_V
+    delta = max(-128, min(127, delta))
+    return bytes([CMD_MAGIC, cmd, delta + 128])

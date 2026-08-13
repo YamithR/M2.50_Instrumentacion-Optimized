@@ -150,7 +150,8 @@ class SimEngine(QObject):
                 self._valve_blocked = False
                 self._s1_reloaded_this_hold = True
 
-        if not self._valve_blocked and s3_rising:
+        fire_allowed = not self._valve_blocked
+        if fire_allowed and s3_rising:
             self._rounds_fired += 1
             if self._rounds_fired >= self.magazine_max:
                 self._valve_blocked = True
@@ -158,10 +159,12 @@ class SimEngine(QObject):
         # Pulso manual: activo mientras dure, con el mismo efecto visual
         # que un disparo real (s3/valve encendidos) sin afectar el flanco de S3.
         manual_active = now < self._manual_pulse_until
-        shot_visual = s3 or manual_active
+        # Cargador agotado: ni la válvula ni el "disparo" visible deben
+        # activarse hasta que se recargue (aunque S3 siga presionado).
+        shot_visual = (s3 or manual_active) and not self._valve_blocked
 
         # Eventos de mouse y disparo para ControlLink (cuando estén activados)
-        if s3_rising:
+        if fire_allowed and s3_rising:
             self.fire_click.emit()
         self._check_encoder_delta()
 

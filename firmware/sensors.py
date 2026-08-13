@@ -126,6 +126,13 @@ def reload_active():
     return time.ticks_diff(_reload_show_until, time.ticks_ms()) > 0
 
 
+def inject_encoder(axis, delta):
+    """ControlLink (cmd 0xBB 0x03/0x04): suma delta al contador real del
+    encoder (0=H, 1=V), igual que si girara físicamente — así el mismo
+    hid_mouse.update() mueve el mouse real por el mismo camino de código."""
+    _counters[axis] += delta
+
+
 def set_override(arg):
     """ControlLink (cmd 0xBB 0x02): bit3 = habilitado; bits0-2 = S1/S2/S3.
     Los valores forzados se combinan con OR sobre los sensores físicos."""

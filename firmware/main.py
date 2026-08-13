@@ -1,8 +1,7 @@
 # main.py — Orquestador: secuencia de arranque con LED RGB + loop principal.
 #
 # FASE 1 [0–10 s]  : AZUL parpadeo — escucha handshake USB (0xAA 0x55)
-# FASE 2 [10–40 s] : AMARILLO parpadeo — BLE advertising "M2-DAQ"
-# FASE 3 [>40 s]   : VERDE fijo — autónomo (HID + ESPNow, sin host externo)
+# FASE 2 [>10 s]   : VERDE fijo — autónomo (HID + ESPNow, sin host externo)
 # Eventos: ROJO flash 100 ms (disparo S3) · NARANJA flash 300 ms (recarga S1)
 # HID y ESPNow SIEMPRE activos, independientes del transporte.
 
@@ -71,7 +70,6 @@ def run():
     transport.init_usb()
 
     t0 = time.ticks_ms()
-    ble_started = False
     base_color = None                       # color de fondo actual del LED
     flash_until = 0
     flash_color = None
@@ -89,36 +87,31 @@ def run():
                 sensors.valve_pulse(arg * 10)           # decenas de ms
             elif cmd == config.CMD_SET_SENSORS:
                 sensors.set_override(arg)               # ControlLink
+            elif cmd == config.CMD_ENC_H:
+                sensors.inject_encoder(0, arg - 128)     # ControlLink (int8)
+            elif cmd == config.CMD_ENC_V:
+                sensors.inject_encoder(1, arg - 128)     # ControlLink (int8)
 
         # ── Gestión de fases / transporte ──────────────────────────────
         mode = transport.mode()
         if mode == transport.MODE_USB:
             base_color = config.LED_BLUE                    # 🔵 fijo
-        elif mode == transport.MODE_BLE:
-            base_color = config.LED_YELLOW                  # 🟡 fijo
         elif elapsed_s < config.PHASE1_USB_S:
             # FASE 1: escucha USB
             base_color = config.LED_BLUE if blink_on else config.LED_OFF
             if transport.usb_check_handshake():
                 print("[main] Handshake USB — modo USB binario activo.")
-        elif elapsed_s < config.PHASE2_BLE_S:
-            # FASE 2: BLE advertising (el handshake USB sigue aceptándose)
-            if not ble_started:
-                ble_started = transport.start_ble()
-            base_color = config.LED_YELLOW if blink_on else config.LED_OFF
-            transport.usb_check_handshake()
         else:
-            # FASE 3: autónomo
-            if ble_started:
-                transport.stop_ble()
-                ble_started = False
-                print("[main] Fase 3 — operación autónoma HID.")
+            # FASE 2: autónomo
             base_color = config.LED_GREEN                   # 🟢 fijo
 
         # ── Sensores + HID (siempre activos) ───────────────────────────
         d = sensors.read()
         manual_shot = sensors.consume_manual_shot()
-        hid_mouse.update(d["enc_h"], d["enc_v"], d["s3"], extra_click=manual_shot)
+        # Con el cargador agotado no debe generarse clic HID por S3 (la
+        # válvula ya está bloqueada); solo se libera al recargar.
+        s3_gated = d["s3"] and not d["valve_blocked"]
+        hid_mouse.update(d["enc_h"], d["enc_v"], s3_gated, extra_click=manual_shot)
 
         # ── Eventos → flashes LED + tecla r ────────────────────────────
         if sensors.fire_event():
