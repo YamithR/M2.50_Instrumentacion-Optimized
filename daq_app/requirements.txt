@@ -1,0 +1,3 @@
+PySide6          # GUI principal
+pyqtgraph        # Gráficas de alto rendimiento integradas en Qt
+pyserial         # Comunicación USB UART
